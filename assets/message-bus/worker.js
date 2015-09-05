@@ -2,6 +2,25 @@
   "use strict";
 
   const MessageBusRegex = /\/message-bus\/([0-9a-f]{32})\/poll\?(dlp=t)?$/;
+  self.addEventListener('fetch', (evt) => {
+    // TODO - optimize? this runs a lot
+    if (evt.request.url.endsWith('/message-bus/settings.json')) {
+      // Update the message bus settings
+      evt.request.text().then(function (reqText) {
+        const kvPairs = parseForm(reqText);
+        kvPairs.forEach((a) => settings[a.k] = a.v);
+      });
+      evt.respondWith(new Response('ok'));
+      return;
+    } else {
+      let match = MessageBusRegex.exec(evt.request.url);
+      if (match) {
+        // Intercept & serve
+        serveMessageBus(evt, match[1]);
+      }
+    }
+  });
+
   const uniqueId = 'xxxxxxxxxxxx4xxxyxxxxxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
     /*eslint-disable*/
     var r, v;
@@ -10,14 +29,6 @@
     return v.toString(16);
     /*eslint-enable*/
   });
-
-  function objEach(obj, cb) {
-    for (let key in obj) {
-      if (obj.hasOwnProperty(key)) {
-        cb(key, obj[key]);
-      }
-    }
-  }
 
   const settings = {
     baseUrl: '/',
@@ -39,6 +50,14 @@
   const MIN_REQUEST_INTERVAL = 100,
     CHANNEL_UNSUB_TIMEOUT = 1000 * 60;
 
+  function objEach(obj, cb) {
+    for (let key in obj) {
+      if (obj.hasOwnProperty(key)) {
+        cb(key, obj[key]);
+      }
+    }
+  }
+
   function setBacklogPosition(channel, position) {
     backlog[channel] = {
       last: position,
@@ -48,7 +67,8 @@
 
   function pushBacklogMessage(channel, message) {
     if (!backlog[channel]) {
-      backlog[channel] = { last: message.message_id, messages: [] };
+      backlog[channel] = { last: message.message_id, messages: [message] };
+      return;
     }
     const messageId = message.message_id;
     const messageAry = backlog[channel].messages;
@@ -65,29 +85,6 @@
       }
     }
   }
-
-  self.addEventListener('install', () => {
-    console.log('mb installing');
-  });
-
-  self.addEventListener('fetch', (evt) => {
-    //console.log('got request for', evt.request.url);
-
-    if (evt.request.url.endsWith('settings.json')) {
-      console.log('got settings request!');
-      evt.request.text().then(function (reqText) {
-        const kvPairs = parseForm(reqText);
-        kvPairs.forEach((a) => settings[a.k] = a.v);
-      });
-      evt.respondWith(new Response('ok'));
-      return;
-    } else {
-      let match = MessageBusRegex.exec(evt.request.url);
-      if (match) {
-        serveMessageBus(evt, match[1]);
-      }
-    }
-  });
 
   function timeoutResponse() {
     return new Response('[]', {
