@@ -1,7 +1,7 @@
 (function (self) {
   "use strict";
 
-  const MessageBusRegex = /\/message-bus\/([0-9a-f]{32})\/poll\??$/;
+  const MessageBusRegex = /\/message-bus\/([0-9a-f]{32})\/poll\?(dlp=t)?$/;
   const uniqueId = 'xxxxxxxxxxxx4xxxyxxxxxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
     /*eslint-disable*/
     var r, v;
@@ -24,17 +24,20 @@
     shared_session_key: '',
   };
 
-  // clients[clientId] = Client
-  const clients = {};
+  // activeClients[clientId] = MBClient
+  const activeClients = {};
 
   // backlog[channel] = {
   //   last: position [Number],
+  //   lastRequested: timestamp [Number],
   //   messages: [Array], // in order, lowest position first
   // }
   const backlog = {};
   let currentRequest;
   let lastSuccess = 0;
-  const MIN_REQUEST_INTERVAL = 1000;
+  let lastClientCount = 0;
+  const MIN_REQUEST_INTERVAL = 100,
+    CHANNEL_UNSUB_TIMEOUT = 1000 * 60;
 
   function setBacklogPosition(channel, position) {
     backlog[channel] = {
@@ -93,6 +96,13 @@
     });
   }
 
+  function cancelledResponse() {
+    return new Response('', {
+      status: 400,
+      statusText: 'Request Cancelled'
+    });
+  }
+
   function MBClient(clientId) {
     this.clientId = clientId;
     this.subscriptions = {};
@@ -108,9 +118,9 @@
 
   MBClient.prototype.hasData = function () {
     let found = false;
-    this.eachSubscription((subName, position) => {
-      if (backlog[subName]) {
-        const entry = backlog[subName];
+    this.eachSubscription((channel, position) => {
+      if (backlog[channel]) {
+        const entry = backlog[channel];
         if (entry.last > position) {
           found = true;
         }
@@ -128,9 +138,8 @@
         console.log('Bus timed out! cid:', clientSelf.clientId);
         resolve(timeoutResponse());
       }, 1000 * 60);
-      if (!currentRequest) {
-        restartPolling();
-      }
+      activeClients[clientSelf.clientId] = clientSelf;
+      restartPolling();
     });
     const myClear = (v) => {
       clearTimeout(clientSelf.interval);
@@ -141,21 +150,20 @@
   }
 
   MBClient.prototype.respond = function() {
-    console.log("Responding to message bus client " + this.clientId);
     this.resolve(this.respondNow());
   }
 
   MBClient.prototype.respondNow = function () {
-    delete clients[this.clientId];
+    delete activeClients[this.clientId];
     const status = {};
     let includeStatusChannel = false;
     const messages = [];
-    this.eachSubscription((subName, position) => {
-      const entry = backlog[subName];
+    this.eachSubscription((channel, position) => {
+      const entry = backlog[channel];
       if (!entry) return;
 
       if (position === -1) {
-        status[subName] = entry.last;
+        status[channel] = entry.last;
         includeStatusChannel = true;
       } else {
         entry.messages.forEach((m) => {
@@ -176,16 +184,18 @@
     }
 
     messages.sort((m1, m2) => m2.global_id - m1.global_id);
-    debugger;
+    console.log("Responding to bus client " + this.clientId + " with " + messages.length + " messages");
 
     const response = new Response(JSON.stringify(messages));
     return response;
   }
 
   function serveMessageBus(fetchEvt, clientId) {
-    if (clients[clientId]) {
+    if (activeClients[clientId]) {
+      // TODO aborting fetches https://github.com/whatwg/fetch/issues/27
       console.log('Cancelled previous reqeust for ' + clientId);
-      clients[clientId].reject(); // cancel previous request
+      activeClients[clientId].resolve(cancelledResponse());
+      delete activeClients[clientId];
     }
     const client = new MBClient(clientId);
 
@@ -203,17 +213,27 @@
           return client.respondNow();
         } else {
           console.log('Queuing up message bus client ' + clientId);
-          clients[clientId] = client;
           return client.makePromise();
         }
       })
     );
+
+    setTimeout(ensureRequestActive, MIN_REQUEST_INTERVAL * 2);
+  }
+
+  function ensureRequestActive() {
+    var clientCount = 0;
+    objEach(activeClients, () => clientCount++);
+    if (clientCount > 0 && !currentRequest) {
+      restartPolling();
+    }
   }
 
   let pollDelayInterval = -1;
+  let lastPollRequest = {};
 
   function delayPolling(delay) {
-    if (pollDelayInterval >= 0) {
+    if (pollDelayInterval < 0) {
       pollDelayInterval = setTimeout(() => {
         pollDelayInterval = -1;
         restartPolling();
@@ -221,16 +241,92 @@
     }
   }
 
+  function waitingForClients() {
+    setTimeout(() => {
+      if (currentRequest == null) {
+        lastClientCount = 0;
+        delayPolling(MIN_REQUEST_INTERVAL);
+      }
+    }, MIN_REQUEST_INTERVAL * 5);
+  }
+
   function restartPolling() {
     if (!navigator.onLine) {
       return delayPolling(2000);
     }
-    let timeSinceLast = new Date().getTime() - lastSuccess;
+    const now = new Date().getTime();
+    let timeSinceLast = now - lastSuccess;
     if (timeSinceLast < MIN_REQUEST_INTERVAL) {
-      return delayPolling(MIN_REQUEST_INTERVAL + 1);
+      return delayPolling(MIN_REQUEST_INTERVAL * 2);
     }
 
     pollDelayInterval = -1;
+    const lowestPosition = {};
+    let clientNum = 0;
+
+    objEach(activeClients, (cid, client) => {
+      if (client.hasData()) {
+        client.respond();
+      } else {
+        clientNum++;
+        client.eachSubscription((channel, position) => {
+          if (lowestPosition[channel] === undefined) {
+            lowestPosition[channel] = position;
+          } else {
+            if (lowestPosition[channel] > position) {
+              lowestPosition[channel] = position;
+            }
+          }
+        });
+      }
+    });
+
+    if (clientNum < lastClientCount) {
+      console.log('have ' + clientNum + ' waiting, but had ' + lastClientCount + ' last time');
+      return waitingForClients();
+    }
+
+    objEach(lowestPosition, (channel) => {
+      if (backlog[channel]) {
+        backlog[channel].lastRequested = now;
+      }
+    });
+
+    objEach(backlog, (channel, entry) => {
+      if (lowestPosition[channel] === undefined) {
+        if (entry.lastRequested > now - CHANNEL_UNSUB_TIMEOUT) {
+          lowestPosition[channel] = entry.last;
+        }
+      }
+    });
+
+    if (currentRequest) {
+      let requestsEqual = true;
+      objEach(lowestPosition, (channel, position) => {
+        if (lastPollRequest[channel] !== position) {
+          requestsEqual = false;
+        }
+      });
+      objEach(lastPollRequest, (channel, position) => {
+        if (lowestPosition[channel] !== position) {
+          requestsEqual = false;
+        }
+      });
+
+      if (requestsEqual) {
+        console.log('Skipping - same as active request');
+        return;
+      }
+    }
+
+    lastPollRequest = lowestPosition;
+
+    const formParts = [];
+    let logString = '';
+    objEach(lowestPosition, (channel, position) => {
+      formParts.push(encodeURIComponent(channel) + '=' + encodeURIComponent(position));
+      logString = logString + channel + '=' + position + "\n";
+    });
 
     // XXX - cannot abort fetch
     const headers = new Headers();
@@ -238,31 +334,6 @@
     if (settings.shared_session_key) {
       headers.set('X-Shared-Session-Key', settings.shared_session_key);
     }
-    const lowestPosition = {};
-    let clientNum = 0;
-    const myClients = {};
-
-    objEach(clients, (cid, client) => {
-      myClients[cid] = client;
-      clientNum++;
-      client.eachSubscription((subName, position) => {
-        if (lowestPosition[subName] === undefined) {
-          lowestPosition[subName] = position;
-        } else {
-          if (lowestPosition[subName] > position) {
-            lowestPosition[subName] = position;
-          }
-        }
-      });
-    });
-
-    const formParts = [];
-    let logString = '';
-    objEach(lowestPosition, (subName, position) => {
-      formParts.push(encodeURIComponent(subName) + '=' + encodeURIComponent(position));
-      logString += subName + '=' + position + "\n";
-    });
-
     headers.set('Content-Type', 'application/x-www-form-urlencoded; charset=UTF-8');
 
     const opts = {
@@ -273,9 +344,6 @@
     }
     console.log(`Making bus request for ${clientNum} clients`);
     let thisRequest = fetch(`${settings.baseUrl}message-bus/${uniqueId}/poll`, opts).then((response) => {
-      if (currentRequest !== thisRequest) {
-        throw "cancelled";
-      }
       lastSuccess = new Date().getTime();
       return response.json();
     }).then(json => {
@@ -291,6 +359,7 @@
        */
 
       // Fill backlog
+      // TODO need a flush message
       json.forEach(function(message) {
         if (message.channel === "/__status") {
           objEach(message.data, (channel, position) => {
@@ -301,20 +370,25 @@
         }
       });
     }).then(() => {
-      objEach(myClients, (_, client) => {
+      if (currentRequest !== thisRequest) {  // TODO aborting fetches
+        throw "cancelled";
+      }
+      objEach(activeClients, (_, client) => {
         client.respond();
       });
     }).then(() => {
       currentRequest = null;
+      lastClientCount = clientNum;
     }).catch((err) => {
-      if (err === "cancelled") {
+      if (err === "cancelled") {  // TODO aborting fetches
         console.log('Cancelled bus request completed');
+        ensureRequestActive();
         return;
       }
       console.error(err);
       currentRequest = null;
     });
-    currentRequest = thisRequest;
+    currentRequest = thisRequest; // TODO aborting fetches - https://github.com/whatwg/fetch/issues/27
   }
 
   function parseForm(text) {
