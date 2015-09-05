@@ -1,4 +1,4 @@
-(function (self) {
+(() => {
   "use strict";
 
   const MessageBusRegex = /\/message-bus\/([0-9a-f]{32})\/poll\?(dlp=t)?$/;
@@ -399,4 +399,4 @@
     });
     return result;
   }
-})(self);
+})();
