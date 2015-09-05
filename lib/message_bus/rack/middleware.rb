@@ -71,6 +71,16 @@ class MessageBus::Rack::Middleware
       return diags.call(env)
     end
 
+    if env['PATH_INFO'].start_with? '/message-bus/worker.js'.freeze
+      file = Rack::File.new(File.join(File.dirname(__FILE__), '../../../assets'))
+      return file.call(env)
+    end
+
+    if env['PATH_INFO'].start_with? '/message-bus/settings.json'.freeze
+      return [400, {}, ["Request must be captured by service worker."]]
+    end
+
+
     client_id = env['PATH_INFO'].split("/")[2]
     return [404, {}, ["not found"]] unless client_id
 
