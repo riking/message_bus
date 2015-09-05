@@ -48,7 +48,9 @@
   let lastSuccess = 0;
   let lastClientCount = 0;
   const MIN_REQUEST_INTERVAL = 100,
-    CHANNEL_UNSUB_TIMEOUT = 1000 * 60;
+    CHANNEL_UNSUB_TIMEOUT = 1000 * 60,
+    CLIENT_FAILSAFE_TIMEOUT = 1000 * 60,
+    NETWORK_DELAY = 1000 * 2;
 
   function objEach(obj, cb) {
     for (let key in obj) {
@@ -132,9 +134,9 @@
       clientSelf.resolve = resolve;
       clientSelf.reject = reject;
       clientSelf.interval = setTimeout(() => {
-        console.log('Bus timed out! cid:', clientSelf.clientId);
+        console.error('Bus timed out! cid:', clientSelf.clientId);
         resolve(timeoutResponse());
-      }, 1000 * 60);
+      }, CLIENT_FAILSAFE_TIMEOUT);
       activeClients[clientSelf.clientId] = clientSelf;
       restartPolling();
     });
@@ -249,7 +251,7 @@
 
   function restartPolling() {
     if (!navigator.onLine) {
-      return delayPolling(2000);
+      return delayPolling(NETWORK_DELAY);
     }
     const now = new Date().getTime();
     let timeSinceLast = now - lastSuccess;
@@ -381,9 +383,11 @@
         console.log('Cancelled bus request completed');
         ensureRequestActive();
         return;
+      } else {
+        console.error(err);
+        currentRequest = null;
+        delayPolling(NETWORK_DELAY);
       }
-      console.error(err);
-      currentRequest = null;
     });
     currentRequest = thisRequest; // TODO aborting fetches - https://github.com/whatwg/fetch/issues/27
   }
