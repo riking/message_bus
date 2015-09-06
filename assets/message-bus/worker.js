@@ -340,6 +340,8 @@
       headers: headers,
       body: formParts.join('&'),
       cache: 'no-store',
+      credentials: 'include',
+      mode: 'cors'
     }
     console.log(`Making bus request for ${clientNum} clients`);
     let thisRequest = fetch(`${settings.baseUrl}message-bus/${uniqueId}/poll`, opts).then((response) => {
