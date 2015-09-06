@@ -44,12 +44,15 @@
   //   messages: [Array], // in order, lowest position first
   // }
   const backlog = {};
-  let currentRequest;
-  let lastSuccess = 0;
-  let lastClientCount = 0;
+  let currentRequest = null;
+  let lastSuccess = {
+    time: 0,
+    clientCount: 0
+  };
   const MIN_REQUEST_INTERVAL = 100,
     CHANNEL_UNSUB_TIMEOUT = 1000 * 60,
     CLIENT_FAILSAFE_TIMEOUT = 1000 * 60,
+    WAITING_FOR_CLIENTS_TIMEOUT = 1000 * 3,
     NETWORK_DELAY = 1000 * 2;
 
   function objEach(obj, cb) {
@@ -229,7 +232,6 @@
   }
 
   let pollDelayInterval = -1;
-  let lastPollRequest = {};
 
   function delayPolling(delay) {
     if (pollDelayInterval < 0) {
@@ -243,13 +245,28 @@
   function waitingForClients() {
     setTimeout(() => {
       if (currentRequest == null) {
-        lastClientCount = 0;
+        lastSuccess.clientCount = 0;
         delayPolling(MIN_REQUEST_INTERVAL);
       }
     }, MIN_REQUEST_INTERVAL * 5);
   }
 
   function restartPolling() {
+    // Conditions:
+    //  - if it's been less than MIN_REQUEST_INTERVAL since the last request started, wait MIN_REQUEST_INTERVAL
+    //  - if less clients signed up than last time, wait until WAITING_FOR_CLIENTS_TIMEOUT elapses
+    //  - if a channel has been requested in the last CHANNEL_UNSUB_TIMEOUT but it's not here now, include it
+    //  - if a request is running and we have the same data to send, do nothing
+    //
+    // Actions:
+    //  - if more channels have been added, cancel previous request
+    //  - if any client has data in the backlog, respond (and wait for WAITING_FOR_CLIENTS_TIMEOUT)
+    //  - if pollDelayInterval is running, cancel it
+    //  - if we have no subscribed channels, stop polling
+    //  - send the request
+    //
+
+
     if (!navigator.onLine) {
       return delayPolling(NETWORK_DELAY);
     }
@@ -259,7 +276,9 @@
       return delayPolling(MIN_REQUEST_INTERVAL * 2);
     }
 
+    clearTimeout(pollDelayInterval);
     pollDelayInterval = -1;
+
     const lowestPosition = {};
     let clientNum = 0;
 
@@ -280,8 +299,8 @@
       }
     });
 
-    if (clientNum < lastClientCount) {
-      console.log('have ' + clientNum + ' waiting, but had ' + lastClientCount + ' last time');
+    if (clientNum < lastSuccess.clientCount) {
+      console.log('have ' + clientNum + ' waiting, but had ' + lastSuccess.clientCount + ' last time');
       return waitingForClients();
     }
 
@@ -300,6 +319,7 @@
     });
 
     if (currentRequest) {
+      const lastPollRequest = currentRequest.sentData;
       let requestsEqual = true;
       objEach(lowestPosition, (channel, position) => {
         if (lastPollRequest[channel] !== position) {
@@ -318,11 +338,14 @@
       }
     }
 
-    lastPollRequest = lowestPosition;
-    doPolling(lowestPosition);
+    if (currentRequest) {
+      currentRequest.cancelFunc();
+    }
+
+    doPolling(lowestPosition, clientNum);
   }
 
-  function doPolling(positions) {
+  function doPolling(positions, clientCount) {
     const formParts = [];
     let logString = '';
     objEach(positions, (channel, position) => {
@@ -330,6 +353,7 @@
       logString = logString + channel + '=' + position + "\n";
     });
 
+    const headers = new Headers();
     const opts = {
       method: 'POST',
       headers: headers,
@@ -338,8 +362,6 @@
       credentials: 'include'
     }
 
-    // XXX - cannot abort fetch
-    const headers = new Headers();
     headers.set('X-SILENCE-LOGGER', 'true');
     if (settings.shared_session_key) {
       headers.set('X-Shared-Session-Key', settings.shared_session_key);
@@ -347,8 +369,13 @@
     }
     headers.set('Content-Type', 'application/x-www-form-urlencoded; charset=UTF-8');
 
+    // TODO aborting fetches
+    let cancelled = false;
+    function cancel() {
+      cancelled = true;
+    }
+
     let thisRequest = fetch(`${settings.baseUrl}message-bus/${uniqueId}/poll`, opts).then((response) => {
-      lastSuccess = new Date().getTime();
       return response.json();
     }).then(json => {
       // json is array of messages
@@ -381,19 +408,25 @@
         }
       });
     }).then(() => {
-      if (currentRequest !== thisRequest) {  // TODO aborting fetches
+      // TODO aborting fetches
+      if (cancelled) {
         throw "cancelled";
       }
+
       // Fulfill the network requests
       objEach(activeClients, (_, client) => {
         client.respond();
       });
-    }).then(() => {
+
+      lastSuccess = {
+        time: new Date().getTime(),
+        clientCount: clientCount
+      };
       currentRequest = null;
-      lastClientCount = clientNum;
       setTimeout(restartPolling, 0);
     }).catch((err) => {
-      if (err === "cancelled") {  // TODO aborting fetches
+      // TODO aborting fetches
+      if (err === "cancelled") {
         console.log('Cancelled bus request completed');
         ensureRequestActive();
         return;
@@ -403,7 +436,14 @@
         delayPolling(NETWORK_DELAY);
       }
     });
-    currentRequest = thisRequest; // TODO aborting fetches - https://github.com/whatwg/fetch/issues/27
+
+    // TODO aborting fetches - https://github.com/whatwg/fetch/issues/27
+    currentRequest = {
+      fetchPromise: thisRequest,
+      sentData: positions,
+      clientNum: clientCount,
+      cancelFunc: cancel,
+    };
   }
 
   function parseForm(text) {
