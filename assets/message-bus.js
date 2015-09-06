@@ -126,7 +126,7 @@ window.MessageBus = (function() {
         var interval;
         try {
           if (gotData || aborted) {
-            interval = 100;
+            interval = 100; // MIN_REQUEST_INTERVAL
           } else {
             interval = me.callbackInterval;
             if (failCount > 2) {
@@ -140,8 +140,8 @@ window.MessageBus = (function() {
 
             interval -= (new Date() - lastAjax);
 
-            if (interval < 100) {
-              interval = 100;
+            if (interval < 100) { // MIN_REQUEST_INTERVAL
+              interval = 100; // MIN_REQUEST_INTERVAL
             }
           }
         } catch(e) {
