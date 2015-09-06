@@ -10,7 +10,7 @@
 window.MessageBus = (function() {
   // http://stackoverflow.com/questions/105034/how-to-create-a-guid-uuid-in-javascript
   var callbacks, clientId, failCount, shouldLongPoll, queue, responseCallbacks, uniqueId, baseUrl;
-  var me, started, stopped, longPoller, pollTimeout, paused, later;
+  var me, started, stopped, longPoller, pollTimeout, paused, later, workerBroken;
 
   uniqueId = function() {
     return 'xxxxxxxxxxxx4xxxyxxxxxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
@@ -30,6 +30,7 @@ window.MessageBus = (function() {
   baseUrl = "/";
   paused = false;
   later = [];
+  workerBroken = false;
 
   var hiddenProperty;
 
@@ -81,6 +82,10 @@ window.MessageBus = (function() {
         if (message.channel === "/__flush") {
           callback.last_id = -1;
         }
+        if (message.channel === "/__worker_broken") {
+          console.warn("MessageBus: ServiceWorker indicated it is broken, bypassing");
+          workerBroken = true;
+        }
       });
     });
 
@@ -93,8 +98,16 @@ window.MessageBus = (function() {
     lastAjax = new Date();
     totalAjaxCalls += 1;
 
+    var query = [];
+    if (!shouldLongPoll() || !me.enableLongPolling) {
+      query.push("dlp=t");
+    }
+    if (workerBroken) {
+      query.push("worker=f");
+    }
+
     return me.ajax({
-      url: me.baseUrl + "message-bus/" + me.clientId + "/poll?" + (!shouldLongPoll() || !me.enableLongPolling ? "dlp=t" : ""),
+      url: me.baseUrl + "message-bus/" + me.clientId + "/poll?" + query.join('&'),
       data: data,
       cache: false,
       dataType: 'json',

@@ -1,7 +1,13 @@
 (() => {
   "use strict";
 
+  // TODO - handle every query param
+  // dlp=t - disable long polling
+  // worker=f - do not handle through serviceworker
+
+  // currently, dlp=t is ignored and worker=f causes a match failure
   const MessageBusRegex = /\/message-bus\/([0-9a-f]{32})\/poll\?(dlp=t)?$/;
+
   self.addEventListener('fetch', (evt) => {
     // TODO - optimize? this runs a lot
     if (evt.request.url.endsWith('/message-bus/settings.json')) {
@@ -92,14 +98,14 @@
   }
 
   function timeoutResponse() {
-    return new Response('[]', {
+    return new Response('[{"message_id":-1,"global_id":-1,"channel":"/__worker_broken","data":null}]', {
       status: 504,
-      statusText: 'Network Timed Out'
+      statusText: 'ServiecWorker Timed Out'
     });
   }
 
   function cancelledResponse() {
-    return new Response('', {
+    return new Response('[INVALID JSON]', {
       status: 400,
       statusText: 'Request Cancelled'
     });
