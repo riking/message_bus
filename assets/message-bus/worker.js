@@ -319,37 +319,41 @@
     }
 
     lastPollRequest = lowestPosition;
+    doPolling(lowestPosition);
+  }
 
+  function doPolling(positions) {
     const formParts = [];
     let logString = '';
-    objEach(lowestPosition, (channel, position) => {
+    objEach(positions, (channel, position) => {
       formParts.push(encodeURIComponent(channel) + '=' + encodeURIComponent(position));
       logString = logString + channel + '=' + position + "\n";
     });
-
-    // XXX - cannot abort fetch
-    const headers = new Headers();
-    headers.set('X-SILENCE-LOGGER', 'true');
-    if (settings.shared_session_key) {
-      headers.set('X-Shared-Session-Key', settings.shared_session_key);
-    }
-    headers.set('Content-Type', 'application/x-www-form-urlencoded; charset=UTF-8');
 
     const opts = {
       method: 'POST',
       headers: headers,
       body: formParts.join('&'),
       cache: 'no-store',
-      credentials: 'include',
-      mode: 'cors'
+      credentials: 'include'
     }
-    console.log(`Making bus request for ${clientNum} clients`);
+
+    // XXX - cannot abort fetch
+    const headers = new Headers();
+    headers.set('X-SILENCE-LOGGER', 'true');
+    if (settings.shared_session_key) {
+      headers.set('X-Shared-Session-Key', settings.shared_session_key);
+      opts.mode = 'cors';
+    }
+    headers.set('Content-Type', 'application/x-www-form-urlencoded; charset=UTF-8');
+
     let thisRequest = fetch(`${settings.baseUrl}message-bus/${uniqueId}/poll`, opts).then((response) => {
       lastSuccess = new Date().getTime();
       return response.json();
     }).then(json => {
-      // json is array of objects
+      // json is array of messages
       /*
+      [Message]
       { channel: '/__status',
         data: {
           // Position map
@@ -380,12 +384,14 @@
       if (currentRequest !== thisRequest) {  // TODO aborting fetches
         throw "cancelled";
       }
+      // Fulfill the network requests
       objEach(activeClients, (_, client) => {
         client.respond();
       });
     }).then(() => {
       currentRequest = null;
       lastClientCount = clientNum;
+      setTimeout(restartPolling, 0);
     }).catch((err) => {
       if (err === "cancelled") {  // TODO aborting fetches
         console.log('Cancelled bus request completed');
