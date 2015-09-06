@@ -359,12 +359,18 @@
       }
        */
 
-      // Fill backlog
-      // TODO need a flush message
+      // Fill backlog with messages from server
       json.forEach(function(message) {
         if (message.channel === "/__status") {
           objEach(message.data, (channel, position) => {
             setBacklogPosition(channel, position);
+          });
+        } else if (message.channel === "/__flush") {
+          const now_afterRequest = new Date().getTime();
+          objEach(backlog, (channel, entry) => {
+            entry.last = -1;
+            entry.lastRequested = now_afterRequest;
+            entry.messages = [];
           });
         } else {
           pushBacklogMessage(message.channel, message);
