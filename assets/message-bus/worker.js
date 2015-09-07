@@ -77,7 +77,7 @@
   };
   let requestIdCount = 1;
   const MIN_REQUEST_INTERVAL = 100,
-    CHANNEL_UNSUB_TIMEOUT = 1000 * 60,
+    CHANNEL_KEEP_TIME = 1000 * 60,
     CLIENT_FAILSAFE_TIMEOUT = 1000 * 60,
     WAITING_FOR_CLIENTS_TIMEOUT = 1000 * 3,
     // note: this should be unique: it's both a duration and a signalling value
@@ -307,7 +307,7 @@
     // Actions:
     //  1) if any client has data in the backlog, respond (and wait for WAITING_FOR_CLIENTS_TIMEOUT)
     //     (this needs to happen before the reschedule)
-    //  2) if a channel has been requested in the last CHANNEL_UNSUB_TIMEOUT but it's not here now, include it
+    //  2) if a channel has been requested in the last CHANNEL_KEEP_TIME but it's not here now, include it
     //  3) save channel last requested times
     //  4) if more channels have been added, cancel previous request
     //  5) if pollDelayInterval is running, cancel it
@@ -409,10 +409,10 @@
       return; // stop
     }
 
-    // 2) if a channel has been requested in the last CHANNEL_UNSUB_TIMEOUT but it's not here now, include it
+    // 2) if a channel has been requested in the last CHANNEL_KEEP_TIME but it's not here now, include it
     objEach(backlog, (channel, entry) => {
       if (requestPositions[channel] === undefined) {
-        if (entry.lastRequested > now - CHANNEL_UNSUB_TIMEOUT) {
+        if (entry.lastRequested > now - CHANNEL_KEEP_TIME) {
           requestPositions[channel] = entry.last;
         }
       }
