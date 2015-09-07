@@ -183,6 +183,11 @@
   function MBClient(clientId) {
     this.clientId = clientId;
     this.subscriptions = {};
+    this.resolve = null;
+    this.reject = null;
+    this.interval = null;
+    this.startedAt = null;
+    this.flushed = false;
   }
 
   MBClient.prototype.subscribe = function (chan, last_position) {
@@ -211,11 +216,14 @@
     const promise = new Promise(function (resolve, reject) {
       clientSelf.resolve = resolve;
       clientSelf.reject = reject;
+
       // Failsafe if the worker polling breaks
       clientSelf.interval = setTimeout(() => {
         console.error('Bus timed out! cid:', clientSelf.clientId);
         resolve(timeoutResponse());
       }, CLIENT_FAILSAFE_TIMEOUT);
+
+      // Add to activeClients, call restartPolling()
       activeClients[clientSelf.clientId] = clientSelf;
       restartPolling();
     });
@@ -236,6 +244,7 @@
   }
 
   MBClient.prototype.respondNow = function () {
+    // TODO - find a way to not respond if nothing to send and it hasn't been very long
     delete activeClients[this.clientId];
     const status = {};
     let includeStatusChannel = false;
@@ -408,6 +417,7 @@
       }
     }
 
+    pollRequestedAt = 0;
     noDelayDoPolling();
   }
 
@@ -504,7 +514,6 @@
     }
 
     // 7) send the request
-    pollRequestedAt = 0;
     doPolling(requestPositions, clientIds);
   }
 
