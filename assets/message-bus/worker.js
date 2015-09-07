@@ -597,7 +597,7 @@
 
       if (currentRequest.debugRequestId === debugRequestId) {
         currentRequest = null;
-        setTimeout(restartPolling, WAITING_FOR_CLIENTS_TIMEOUT * 1.2);
+        setTimeout(restartPolling, WAITING_FOR_CLIENTS_TIMEOUT * 0.9);
       }
     }).catch((err) => {
       // TODO aborting fetches
@@ -607,9 +607,9 @@
         console.error(err);
       }
 
-      if (currentRequest.debugRequestId === debugRequestId) {
+      if (!currentRequest || currentRequest.debugRequestId === debugRequestId) {
         currentRequest = null;
-        setTimeout(restartPolling, WAITING_FOR_CLIENTS_TIMEOUT * 1.2);
+        setTimeout(restartPolling, WAITING_FOR_CLIENTS_TIMEOUT * 0.9);
       }
     });
 
