@@ -9,7 +9,7 @@
 **/
 window.MessageBus = (function() {
   // http://stackoverflow.com/questions/105034/how-to-create-a-guid-uuid-in-javascript
-  var callbacks, clientId, failCount, shouldLongPoll, queue, responseCallbacks, uniqueId, baseUrl;
+  var callbacks, clientId, failCount, shouldLongPoll, uniqueId, baseUrl;
   var me, started, stopped, longPoller, pollTimeout, paused, later, workerBroken;
 
   uniqueId = function() {
@@ -22,10 +22,7 @@ window.MessageBus = (function() {
   };
 
   clientId = uniqueId();
-  responseCallbacks = {};
   callbacks = [];
-  queue = [];
-  interval = null;
   failCount = 0;
   baseUrl = "/";
   paused = false;
@@ -120,7 +117,7 @@ window.MessageBus = (function() {
         if (paused) {
           if (messages) {
             $.each(messages, function(_,message) {
-              later.push(messages);
+              later.push(message);
             });
           }
         } else {
