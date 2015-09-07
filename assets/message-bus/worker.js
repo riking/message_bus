@@ -272,6 +272,7 @@
 
   function nowonline() {
     clearTimeout(pollDelayInterval);
+    removeEventListener('online', nowonline);
     restartPolling();
   }
 
@@ -347,7 +348,7 @@
         clearTimeout(pollDelayInterval);
         pollDelayInterval = setTimeout(restartPolling, targetTime - now + 10);
         if (_delayFor === EVEN_IF_OFFLINE_TIMEOUT) {
-          addEventListener('ononline', nowonline);
+          addEventListener('online', nowonline);
         }
 
         console.debug('MB: delaying for ' + _delayFor + ': settimeout(' + (targetTime - now) + ')');
