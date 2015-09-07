@@ -50,6 +50,20 @@
   //   messages: [Array], // in order, lowest position first
   // }
   const backlog = {};
+
+  // currentRequest = [null] | {
+  //   // The promise from fetch() after all the .then() chains
+  //   fetchPromise: [Promise]
+  //   // The data (subscriptions) sent to the server
+  //   sentData: [Object] channel: position
+  //   // The number of activeClients when the request was sent
+  //   clientNum: [Number]
+  //   // Call this to cancel the request
+  //   // TODO aborting fetches (right now we throw away the result)
+  //   cancelFunc: [Function]
+  //   // Time when the request was sent
+  //   startedAt: [Number] timestamp
+  // }
   let currentRequest = null;
   let lastSuccess = {
     time: 0,
@@ -59,7 +73,8 @@
     CHANNEL_UNSUB_TIMEOUT = 1000 * 60,
     CLIENT_FAILSAFE_TIMEOUT = 1000 * 60,
     WAITING_FOR_CLIENTS_TIMEOUT = 1000 * 3,
-    NETWORK_DELAY = 1000 * 2;
+    // note: this should be unique: it's both a duration and a signalling value
+    EVEN_IF_OFFLINE_TIMEOUT = (CLIENT_FAILSAFE_TIMEOUT / 2) + 1;
 
   function objEach(obj, cb) {
     for (let key in obj) {
@@ -100,7 +115,7 @@
   function timeoutResponse() {
     return new Response('[{"message_id":-1,"global_id":-1,"channel":"/__worker_broken","data":null}]', {
       status: 504,
-      statusText: 'ServiecWorker Timed Out'
+      statusText: 'ServiceWorker Timed Out'
     });
   }
 
@@ -157,6 +172,10 @@
     return promise;
   }
 
+  MBClient.prototype.__flush = function() {
+    this.flushed = true;
+  }
+
   MBClient.prototype.respond = function() {
     this.resolve(this.respondNow());
   }
@@ -166,14 +185,16 @@
     const status = {};
     let includeStatusChannel = false;
     const messages = [];
+    const flushed = this.flushed;
+
     this.eachSubscription((channel, position) => {
       const entry = backlog[channel];
       if (!entry) return;
 
-      if (position === -1) {
+      if (flushed || position === -1) {
         status[channel] = entry.last;
         includeStatusChannel = true;
-      } else {
+      } else if (position < entry.last) {
         entry.messages.forEach((m) => {
           if (m.message_id > position) {
             messages.push(m);
@@ -182,6 +203,14 @@
       }
     });
 
+    if (flushed) {
+      messages.push({
+        message_id: -1,
+        global_id: -1,
+        channel: '/__flush',
+        data: null
+      });
+    }
     if (includeStatusChannel) {
       messages.push({
         message_id: -1,
@@ -191,7 +220,9 @@
       });
     }
 
-    messages.sort((m1, m2) => m2.global_id - m1.global_id);
+    if (!flushed) {
+      messages.sort((m1, m2) => m2.global_id - m1.global_id);
+    }
     console.log("Responding to bus client " + this.clientId + " with " + messages.length + " messages");
 
     const response = new Response(JSON.stringify(messages));
@@ -230,125 +261,178 @@
   }
 
   function ensureRequestActive() {
-    var clientCount = 0;
-    objEach(activeClients, () => clientCount++);
-    if (clientCount > 0 && !currentRequest) {
-      restartPolling();
-    }
+    // TODO
+  }
+
+  function nowonline() {
+
   }
 
   let pollDelayInterval = -1;
-
-  function delayPolling(delay) {
-    if (pollDelayInterval < 0) {
-      pollDelayInterval = setTimeout(() => {
-        pollDelayInterval = -1;
-        restartPolling();
-      }, delay);
-    }
-  }
-
-  function waitingForClients() {
-    setTimeout(() => {
-      if (currentRequest == null) {
-        lastSuccess.clientCount = 0;
-        delayPolling(MIN_REQUEST_INTERVAL);
-      }
-    }, MIN_REQUEST_INTERVAL * 5);
-  }
-
+  let pollRequestedAt = 0;
   function restartPolling() {
     // Conditions:
-    //  - if it's been less than MIN_REQUEST_INTERVAL since the last request started, wait MIN_REQUEST_INTERVAL
-    //  - if less clients signed up than last time, wait until WAITING_FOR_CLIENTS_TIMEOUT elapses
-    //  - if a channel has been requested in the last CHANNEL_UNSUB_TIMEOUT but it's not here now, include it
-    //  - if a request is running and we have the same data to send, do nothing
+    //  1) if it's been less than MIN_REQUEST_INTERVAL since the last request started, wait for MIN_REQUEST_INTERVAL
+    //  2) if less (or 0) clients signed up than last time, wait for WAITING_FOR_CLIENTS_TIMEOUT
+    //  3) if the browser is offline, restart when we get online or after EVEN_IF_OFFLINE_TIMEOUT
+    //  4) if we have no clients, don't send the request
+    //  5) if a request is running and we have the same data to send, do nothing
     //
     // Actions:
-    //  - if more channels have been added, cancel previous request
-    //  - if any client has data in the backlog, respond (and wait for WAITING_FOR_CLIENTS_TIMEOUT)
-    //  - if pollDelayInterval is running, cancel it
-    //  - if we have no subscribed channels, stop polling
-    //  - send the request
+    //  1) if any client has data in the backlog, respond (and wait for WAITING_FOR_CLIENTS_TIMEOUT)
+    //     (this needs to happen before the reschedule)
+    //  2) if a channel has been requested in the last CHANNEL_UNSUB_TIMEOUT but it's not here now, include it
+    //  3) save channel last requested times
+    //  4) if more channels have been added, cancel previous request
+    //  5) if pollDelayInterval is running, cancel it
+    //  6) if we have no subscribed channels, stop polling
+    //  7) send the request
     //
+    // Behavior:
+    //  - setup
+    //  - conditions 1-3, action 1
+    //  - if a condition is not met, reschedule
+    //  - condition 4
+    //  - determine channels to request
+    //  - actions 2-3
+    //  - condition 5, action 4
+    //  - actions 5-7
 
-
-    if (!navigator.onLine) {
-      return delayPolling(NETWORK_DELAY);
-    }
+    // setup
+    let _delayFor = 0;
+    const delayFor = (duration) => { if (duration > _delayFor) { _delayFor = duration; } };
     const now = new Date().getTime();
-    let timeSinceLast = now - lastSuccess;
-    if (timeSinceLast < MIN_REQUEST_INTERVAL) {
-      return delayPolling(MIN_REQUEST_INTERVAL * 2);
+    if (pollRequestedAt === 0) {
+      pollRequestedAt = now;
     }
 
-    clearTimeout(pollDelayInterval);
-    pollDelayInterval = -1;
+    //  1) if it's been less than MIN_REQUEST_INTERVAL since the last request started, wait MIN_REQUEST_INTERVAL
+    if (now - currentRequest.startedAt < MIN_REQUEST_INTERVAL) {
+      delayFor(MIN_REQUEST_INTERVAL);
+    }
 
-    const lowestPosition = {};
     let clientNum = 0;
-
     objEach(activeClients, (cid, client) => {
       if (client.hasData()) {
+        //  1) if any client has data in the backlog, respond (and wait for WAITING_FOR_CLIENTS_TIMEOUT)
         client.respond();
+        delayFor(WAITING_FOR_CLIENTS_TIMEOUT);
       } else {
         clientNum++;
-        client.eachSubscription((channel, position) => {
-          if (lowestPosition[channel] === undefined) {
-            lowestPosition[channel] = position;
-          } else {
-            if (lowestPosition[channel] > position) {
-              lowestPosition[channel] = position;
-            }
-          }
-        });
       }
     });
 
-    if (clientNum < lastSuccess.clientCount) {
-      console.log('have ' + clientNum + ' waiting, but had ' + lastSuccess.clientCount + ' last time');
-      return waitingForClients();
+    //  2) if less (or 0) clients signed up than last time, wait for WAITING_FOR_CLIENTS_TIMEOUT
+    if (clientNum === 0 || clientNum < lastSuccess.clientCount) {
+      delayFor(WAITING_FOR_CLIENTS_TIMEOUT);
     }
 
-    objEach(lowestPosition, (channel) => {
+    //  3) if the browser is offline, restart when we get online or after EVEN_IF_OFFLINE_TIMEOUT
+    if (!navigator.onLine) {
+      delayFor(EVEN_IF_OFFLINE_TIMEOUT);
+    }
+
+    // if a condition is not met, reschedule
+    if (_delayFor > 0) {
+      const targetTime = pollRequestedAt + _delayFor;
+      if (targetTime > now) {
+        clearTimeout(pollDelayInterval);
+        pollDelayInterval = setTimeout(restartPolling, now - targetTime + 1);
+        if (_delayFor === EVEN_IF_OFFLINE_TIMEOUT) {
+          addEventListener('ononline', nowonline);
+        }
+
+        return; // pollDelayInterval
+      }
+    }
+
+    //  4) if we have no clients, don't send the request
+    if (clientNum === 0) {
+      console.info("Stopping serviceWorker message bus polling.");
+    }
+
+    // determine channels to request
+    const requestPositions = {};
+    const clientIds = [];
+
+    objEach(activeClients, (cid, client) => {
+      clientIds.push(cid);
+      client.eachSubscription((channel, position) => {
+        if (requestPositions[channel] === undefined) {
+          requestPositions[channel] = position;
+        } else {
+          // How do we combine the positions?
+          // Consider: There may be messages that one client got but not another
+          // If a client had messages to see, it would have been responded to in Action 1 above
+          // therefore, we should use the HIGHEST position
+          if (requestPositions[channel] < position) {
+            requestPositions[channel] = position;
+          }
+        }
+      });
+    });
+
+    // 2) if a channel has been requested in the last CHANNEL_UNSUB_TIMEOUT but it's not here now, include it
+    objEach(backlog, (channel, entry) => {
+      if (requestPositions[channel] === undefined) {
+        if (entry.lastRequested > now - CHANNEL_UNSUB_TIMEOUT) {
+          requestPositions[channel] = entry.last;
+        }
+      }
+    });
+
+    // 3) save channel last requested times
+    objEach(requestPositions, (channel) => {
       if (backlog[channel]) {
         backlog[channel].lastRequested = now;
       }
     });
 
-    objEach(backlog, (channel, entry) => {
-      if (lowestPosition[channel] === undefined) {
-        if (entry.lastRequested > now - CHANNEL_UNSUB_TIMEOUT) {
-          lowestPosition[channel] = entry.last;
-        }
-      }
-    });
-
     if (currentRequest) {
+      // 5) if a request is running and we have the same data to send, do nothing
+      // 4) if more channels have been added, cancel previous request
       const lastPollRequest = currentRequest.sentData;
       let requestsEqual = true;
-      objEach(lowestPosition, (channel, position) => {
-        if (lastPollRequest[channel] !== position) {
+      let channelAdded = false;
+      objEach(requestPositions, (channel, position) => {
+        if (lastPollRequest[channel] === undefined) {
+          channelAdded = true;
+          requestsEqual = false;
+        } else if (lastPollRequest[channel] !== position) {
           requestsEqual = false;
         }
       });
       objEach(lastPollRequest, (channel, position) => {
-        if (lowestPosition[channel] !== position) {
+        if (requestPositions[channel] !== position) {
           requestsEqual = false;
         }
       });
 
       if (requestsEqual) {
-        console.log('Skipping - same as active request');
-        return;
+        return; // currentRequest
+      }
+      if (channelAdded) {
+        currentRequest.cancelFunc();
+      } else {
+        // A channel was removed or moved up
+        return; // currentRequest
       }
     }
 
-    if (currentRequest) {
-      currentRequest.cancelFunc();
+    // 5) if pollDelayInterval is running, cancel it
+    clearTimeout(pollDelayInterval);
+
+    // 6) if we have no subscribed channels, stop polling
+    let haveAny = false;
+    objEach(requestPositions, () => haveAny = true);
+    if (!haveAny) {
+      console.info("Not sending bus request - no subscribed channels");
+      return; // stop
     }
 
-    doPolling(lowestPosition, clientNum);
+    // 7) send the request
+    doPolling(requestPositions, clientNum);
+    pollRequestedAt = 0;
   }
 
   function doPolling(positions, clientCount) {
@@ -403,11 +487,13 @@
             setBacklogPosition(channel, position);
           });
         } else if (message.channel === "/__flush") {
-          const now_afterRequest = new Date().getTime();
-          objEach(backlog, (channel, entry) => {
-            entry.last = -1;
-            entry.lastRequested = now_afterRequest;
-            entry.messages = [];
+          // Wipe backlog
+          objEach(backlog, (channel) => {
+            delete backlog[channel];
+          });
+          // Mark clients to send flush message
+          objEach(activeClients, (_, client) => {
+            client.__flush();
           });
         } else {
           pushBacklogMessage(message.channel, message);
@@ -449,6 +535,7 @@
       sentData: positions,
       clientNum: clientCount,
       cancelFunc: cancel,
+      startedAt: new Date().getTime()
     };
   }
 
