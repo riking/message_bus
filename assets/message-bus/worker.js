@@ -95,6 +95,9 @@
     CLIENT_FAILSAFE_TIMEOUT = 1000 * 60,
     // (ms) Time to allow clients to send their bus requests before sending ours
     WAITING_FOR_CLIENTS_TIMEOUT = 1000 * 3,
+    // (ms) Time to wait before sending an empty response
+    // TODO needs to be adjusted based on long_polling_interval
+    NO_RESPONSE_DELAY = 25000,
     // (ms) Time to wait before sending bus request if browser is offline
     // TODO needs to be adjusted based on long_polling_interval
     EVEN_IF_OFFLINE_TIMEOUT = CLIENT_FAILSAFE_TIMEOUT - 25000 - 5000;
@@ -199,16 +202,18 @@
   }
 
   MBClient.prototype.hasData = function () {
-    let found = false;
-    this.eachSubscription((channel, position) => {
-      if (backlog[channel]) {
-        const entry = backlog[channel];
-        if (entry.last > position) {
-          found = true;
+    for (let channel in this.subscriptions) {
+      if (this.subscriptions.hasOwnProperty(channel)) {
+        const position = this.subscriptions[channel];
+        if (backlog[channel]) {
+          const entry = backlog[channel];
+          if (entry.last > position) {
+            return true;
+          }
         }
       }
-    });
-    return found;
+    }
+    return false;
   }
 
   MBClient.prototype.makePromise = function () {
@@ -222,6 +227,8 @@
         console.error('Bus timed out! cid:', clientSelf.clientId);
         resolve(timeoutResponse());
       }, CLIENT_FAILSAFE_TIMEOUT);
+
+      clientSelf.startedAt = new Date().getTime();
 
       // Add to activeClients, call restartPolling()
       activeClients[clientSelf.clientId] = clientSelf;
