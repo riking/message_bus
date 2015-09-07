@@ -92,7 +92,7 @@
     CHANNEL_KEEP_TIME = 1000 * 60,
     // (ms) Time to wait for a response from the serviceWorker before declaring it broken
     // TODO needs to be adjusted based on long_polling_interval
-    CLIENT_FAILSAFE_TIMEOUT = 1000 * 60,
+    CLIENT_FAILSAFE_TIMEOUT = 25000 * 2.4,
     // (ms) Time to allow clients to send their bus requests before sending ours
     WAITING_FOR_CLIENTS_TIMEOUT = 1000 * 3,
     // (ms) Time to wait before sending an empty response
@@ -244,6 +244,17 @@
 
   MBClient.prototype.__flush = function() {
     this.flushed = true;
+  }
+
+  MBClient.prototype.shouldRespond = function(now) {
+    if (this.hasData()) {
+      return true;
+    }
+    if (this.startedAt && now - this.startedAt > NO_RESPONSE_DELAY) {
+      // Return an empty response if it's been longer than NO_RESPONSE_DELAY
+      return true;
+    }
+    return false;
   }
 
   MBClient.prototype.respond = function() {
@@ -600,15 +611,21 @@
       }
 
       var finalClientCount = 0;
+      //let anyEmpty = false;
+      const now = new Date().getTime();
       // Fulfill the network requests
       objEach(activeClients, (_, client) => {
         finalClientCount++;
-        client.respond();
+        if (client.shouldRespond(now)) {
+          client.respond();
+        } else {
+          //anyEmpty = true;
+        }
       });
 
       console.debug(`MB: Bus request #${debugRequestId} completed`);
       lastSuccess = {
-        time: new Date().getTime(),
+        time: now,
         clientCount: finalClientCount
       };
 
