@@ -12,9 +12,15 @@
     // TODO - optimize? this runs a lot
     if (evt.request.url.endsWith('/message-bus/settings.json')) {
       // Update the message bus settings
-      evt.request.text().then(function (reqText) {
-        const kvPairs = parseForm(reqText);
-        kvPairs.forEach((a) => settings[a.k] = a.v);
+      evt.request.basicUrlForm().then(function (formData) {
+        objEach(formData, (k,v) => {
+          const existing = settings[k];
+          if (typeof existing === "string") {
+            settings[k] = v;
+          } else if (typeof existing === "number") {
+            settings[k] = parseInt(v);
+          }
+        });
       });
       evt.respondWith(new Response('ok'));
       return;
@@ -83,6 +89,22 @@
         cb(key, obj[key]);
       }
     }
+  }
+
+  {
+    const basicUrlForm = function () {
+      return this.text().then(function (text) {
+        const result = {};
+        text.split('&').forEach(function (part) {
+          const keyValue = part.split('=');
+          result[decodeURIComponent(keyValue[0])] = decodeURIComponent(keyValue[1]);
+        });
+        return result;
+      });
+    }
+
+    Request.prototype.basicUrlForm = basicUrlForm;
+    Response.prototype.basicUrlForm = basicUrlForm;
   }
 
   function setBacklogPosition(channel, position) {
@@ -241,12 +263,10 @@
     const client = new MBClient(clientId);
 
     fetchEvt.respondWith(
-      fetchEvt.request.text().then((bodyText) => {
-        const kvPairs = parseForm(bodyText);
-        kvPairs.forEach((reg) => {
-          client.subscribe(reg.k, parseInt(reg.v));
+      fetchEvt.request.basicUrlForm().then((formData) => {
+        objEach(formData, (channel, position) => {
+          client.subscribe(channel, parseInt(position));
         });
-        return null;
       }).then(() => {
         if (client.hasData()) {
           console.log('Returned instant data for ' + clientId);
@@ -569,14 +589,5 @@
       startedAt: new Date().getTime(),
       debugRequestId: debugRequestId,
     };
-  }
-
-  function parseForm(text) {
-    const result = [];
-    text.split('&').forEach(function (part) {
-      const keyValue = part.split('=');
-      result.push({k: decodeURIComponent(keyValue[0]), v: decodeURIComponent(keyValue[1])});
-    });
-    return result;
   }
 })();
