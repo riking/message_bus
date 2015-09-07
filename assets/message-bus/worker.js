@@ -70,8 +70,7 @@
   // lastSuccess = [Object]
   //   // Time when request finished successfully
   //   time: [Number: Timestamp]
-  //   // The number of clients serviced by the request when it was intially scheduled
-  //   // (does not include late arrivals with no new channels, only on-time)
+  //   // The number of clients serviced by the request when it finished
   //   clientCount: [Number]
   let lastSuccess = {
     time: 0,
@@ -584,15 +583,17 @@
         throw "cancelled";
       }
 
+      var finalClientCount = 0;
       // Fulfill the network requests
       objEach(activeClients, (_, client) => {
+        finalClientCount++;
         client.respond();
       });
 
       console.debug(`MB: Bus request #${debugRequestId} completed`);
       lastSuccess = {
         time: new Date().getTime(),
-        clientCount: clientIds.length
+        clientCount: finalClientCount
       };
 
       if (currentRequest.debugRequestId === debugRequestId) {
