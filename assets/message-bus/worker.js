@@ -304,7 +304,11 @@
 
     // setup
     let _delayFor = 0;
-    const delayFor = (duration) => { if (duration > _delayFor) { _delayFor = duration; } };
+    const delayFor = (duration) => {
+      if (duration > _delayFor) {
+        _delayFor = duration;
+      }
+    };
     const now = new Date().getTime();
     if (pollRequestedAt === 0) {
       pollRequestedAt = now;
@@ -350,10 +354,11 @@
       }
     }
 
-    //  4) if we have no clients, don't send the request
-    if (clientNum === 0) {
-      console.info("Stopping serviceWorker message bus polling.");
-    }
+    noDelayDoPolling();
+  }
+
+  function noDelayDoPolling() {
+    const now = new Date().getTime();
 
     // determine channels to request
     const requestPositions = {};
@@ -375,6 +380,12 @@
         }
       });
     });
+
+    //  4) if we have no clients, don't send the request
+    if (clientIds.length === 0) {
+      console.info("Not sending bus request - no clients");
+      return; // stop
+    }
 
     // 2) if a channel has been requested in the last CHANNEL_UNSUB_TIMEOUT but it's not here now, include it
     objEach(backlog, (channel, entry) => {
@@ -435,11 +446,11 @@
     }
 
     // 7) send the request
-    doPolling(requestPositions, clientNum);
+    doPolling(requestPositions, clientIds);
     pollRequestedAt = 0;
   }
 
-  function doPolling(positions, clientCount) {
+  function doPolling(positions, clientIds) {
     const formParts = [];
     let logString = '';
     objEach(positions, (channel, position) => {
@@ -462,6 +473,7 @@
       opts.mode = 'cors';
     }
     headers.set('Content-Type', 'application/x-www-form-urlencoded; charset=UTF-8');
+    // headers.set('Bus-Client-IDs', clientIds.join(','));
 
     // TODO aborting fetches
     let cancelled = false;
@@ -516,7 +528,7 @@
 
       lastSuccess = {
         time: new Date().getTime(),
-        clientCount: clientCount
+        clientCount: clientIds.length
       };
       currentRequest = null;
       setTimeout(restartPolling, MIN_REQUEST_INTERVAL);
@@ -537,7 +549,7 @@
     currentRequest = {
       fetchPromise: thisRequest,
       sentData: positions,
-      clientNum: clientCount,
+      clientNum: clientIds.length,
       cancelFunc: cancel,
       startedAt: new Date().getTime()
     };
