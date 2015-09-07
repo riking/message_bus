@@ -1,6 +1,9 @@
 (() => {
   "use strict";
 
+  self.MB_DEBUG = false;
+  console.info('Set self.MB_DEBUG = true to see debug messages');
+
   // TODO - handle every query param
   // dlp=t - disable long polling
   // worker=f - do not handle through serviceworker
@@ -135,6 +138,12 @@
 
     Request.prototype.basicUrlForm = basicUrlForm;
     Response.prototype.basicUrlForm = basicUrlForm;
+  }
+
+  function debugLog(message) {
+    if (self.MB_DEBUG) {
+      console.debug(message);
+    }
   }
 
   // Utility Functions
@@ -305,7 +314,7 @@
     if (!flushed) {
       messages.sort((m1, m2) => m2.global_id - m1.global_id);
     }
-    console.log("Responding to bus client " + this.clientId + " with " + messages.length + " messages");
+    debugLog("MB: Responding to bus client " + this.clientId + " with " + messages.length + " messages");
 
     const response = new Response(JSON.stringify(messages));
     return response;
@@ -315,7 +324,7 @@
 
   function serveMessageBus(fetchEvt, clientId) {
     if (activeClients[clientId]) {
-      console.log('MB: Cleared aborted request from ' + clientId);
+      debugLog('MB: Cleared aborted request from ' + clientId);
       activeClients[clientId].resolve(cancelledResponse());
       delete activeClients[clientId];
     }
@@ -329,10 +338,9 @@
         });
       }).then(() => {
         if (client.hasData()) {
-          console.log('Returned instant data for ' + clientId);
           return client.respondNow();
         } else {
-          console.log('Queuing up message bus client ' + clientId);
+          debugLog('MB: Queuing up message bus client ' + clientId);
           return client.makePromise();
         }
       })
@@ -430,7 +438,7 @@
           addEventListener('online', nowonline);
         }
 
-        console.debug('MB: delaying for ' + _delayFor + ': settimeout(' + (targetTime - now) + ')');
+        debugLog('MB: delaying for ' + _delayFor + ': settimeout(' + (targetTime - now) + ')');
         return; // pollDelayInterval
       }
     }
@@ -465,7 +473,7 @@
 
     //  4) if we have no clients, don't send the request
     if (clientIds.length === 0) {
-      console.debug("MB: Not sending bus request - no clients");
+      debugLog("MB: Not sending bus request - no clients");
       return; // stop
     }
 
@@ -506,16 +514,16 @@
       });
 
       if (requestsEqual) {
-        console.debug('MB: Requests are equal - skipping');
+        debugLog('MB: Requests are equal - skipping');
         return; // currentRequest
       }
       if (channelAdded) {
-        console.debug(`MB: Cancelling request #${currentRequest.debugRequestId}`);
+        debugLog(`MB: Cancelling request #${currentRequest.debugRequestId}`);
         currentRequest.cancelFunc();
         currentRequest = null;
       } else {
         // A channel was removed or moved up
-        console.debug('MB: Requests are almost equal - skipping');
+        debugLog('MB: Requests are almost equal - skipping');
         return; // currentRequest
       }
     }
@@ -527,7 +535,7 @@
     let haveAny = false;
     objEach(requestPositions, () => haveAny = true);
     if (!haveAny) {
-      console.debug("MB: Not sending bus request - no subscribed channels");
+      debugLog("MB: Not sending bus request - no subscribed channels");
       return; // stop
     }
 
@@ -569,7 +577,7 @@
     const debugRequestId = requestIdCount;
     requestIdCount = requestIdCount + 1;
 
-    console.debug(`MB: Sending message bus request #${debugRequestId} for ${clientIds.join(',')}`);
+    debugLog(`MB: Sending message bus request #${debugRequestId} for ${clientIds.join(',')}`);
     let thisRequest = fetch(`${settings.baseUrl}message-bus/${uniqueId}/poll`, opts).then((response) => {
       return response.json();
     }).then(json => {
@@ -623,7 +631,7 @@
         }
       });
 
-      console.debug(`MB: Bus request #${debugRequestId} completed`);
+      debugLog(`MB: Bus request #${debugRequestId} completed`);
       lastSuccess = {
         time: now,
         clientCount: finalClientCount
@@ -636,7 +644,7 @@
     }).catch((err) => {
       // TODO aborting fetches
       if (err === "cancelled") {
-        console.debug(`MB: Cancelled bus request #${debugRequestId} completed`);
+        debugLog(`MB: Cancelled bus request #${debugRequestId} completed`);
       } else {
         console.error(err);
       }
