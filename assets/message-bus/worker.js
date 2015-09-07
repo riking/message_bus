@@ -4,7 +4,6 @@
   // TODO - handle every query param
   // dlp=t - disable long polling
   // worker=f - do not handle through serviceworker
-
   // currently, dlp=t is ignored and worker=f causes a match failure
   const MessageBusRegex = /\/message-bus\/([0-9a-f]{32})\/poll\?(dlp=t)?$/;
 
@@ -33,18 +32,12 @@
     }
   });
 
-  const uniqueId = 'xxxxxxxxxxxx4xxxyxxxxxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
-    /*eslint-disable*/
-    var r, v;
-    r = Math.random() * 16 | 0;
-    v = c === 'x' ? r : (r & 0x3 | 0x8);
-    return v.toString(16);
-    /*eslint-enable*/
-  });
+  // Global Variables
 
   const settings = {
     baseUrl: '/',
     shared_session_key: '',
+    long_polling_interval: 25000,
   };
 
   // activeClients[clientId] = MBClient
@@ -52,7 +45,7 @@
 
   // backlog[channel] = {
   //   last: position [Number],
-  //   lastRequested: timestamp [Number],
+  //   lastRequested: [Number: Timestamp],
   //   messages: [Array], // in order, lowest position first
   // }
   const backlog = {};
@@ -68,20 +61,53 @@
   //   // TODO aborting fetches (right now we throw away the result)
   //   cancelFunc: [Function]
   //   // Time when the request was sent
-  //   startedAt: [Number] timestamp
+  //   startedAt: [Number: Timestamp]
   // }
   let currentRequest = null;
+
+  // lastSuccess = [Object]
+  //   // Time when request finished successfully
+  //   time: [Number: Timestamp]
+  //   // The number of clients serviced by the request when it was intially scheduled
+  //   // (does not include late arrivals with no new channels, only on-time)
+  //   clientCount: [Number]
   let lastSuccess = {
     time: 0,
     clientCount: 0
   };
+
+  // [Number] count of bus requests sent to the server.
   let requestIdCount = 1;
+  // [Number: setTimeout] return from setTimeout() for restartPolling()
+  let pollDelayInterval = -1;
+  // [Number: Timestamp] timestamp of the first restartPolling() call AFTER the currentRequest started
+  let pollRequestedAt = 0;
+
+  // Constants
+
+  // (ms) Two bus requests will never be sent any closer together than this
   const MIN_REQUEST_INTERVAL = 100,
+    // (ms) Time to keep asking the server for a channel even though no clients use it
     CHANNEL_KEEP_TIME = 1000 * 60,
+    // (ms) Time to wait for a response from the serviceWorker before declaring it broken
+    // TODO needs to be adjusted based on long_polling_interval
     CLIENT_FAILSAFE_TIMEOUT = 1000 * 60,
+    // (ms) Time to allow clients to send their bus requests before sending ours
     WAITING_FOR_CLIENTS_TIMEOUT = 1000 * 3,
-    // note: this should be unique: it's both a duration and a signalling value
-    EVEN_IF_OFFLINE_TIMEOUT = (CLIENT_FAILSAFE_TIMEOUT / 2) + 1;
+    // (ms) Time to wait before sending bus request if browser is offline
+    // TODO needs to be adjusted based on long_polling_interval
+    EVEN_IF_OFFLINE_TIMEOUT = CLIENT_FAILSAFE_TIMEOUT - 25000 - 5000;
+
+  const uniqueId = 'xxxxxxxxxxxx4xxxyxxxxxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+    /*eslint-disable*/
+    var r, v;
+    r = Math.random() * 16 | 0;
+    v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+    /*eslint-enable*/
+  });
+
+  // Library Functions
 
   function objEach(obj, cb) {
     for (let key in obj) {
@@ -106,6 +132,8 @@
     Request.prototype.basicUrlForm = basicUrlForm;
     Response.prototype.basicUrlForm = basicUrlForm;
   }
+
+  // Utility Functions
 
   function setBacklogPosition(channel, position) {
     backlog[channel] = {
@@ -148,6 +176,8 @@
       statusText: 'Request Cancelled'
     });
   }
+
+  // Class: MBClient
 
   function MBClient(clientId) {
     this.clientId = clientId;
@@ -253,6 +283,8 @@
     return response;
   }
 
+  // Bus Polling functions
+
   function serveMessageBus(fetchEvt, clientId) {
     if (activeClients[clientId]) {
       console.log('MB: Cleared aborted request from ' + clientId);
@@ -280,9 +312,6 @@
 
     setTimeout(ensureRequestActive, MIN_REQUEST_INTERVAL * 2);
   }
-
-  let pollDelayInterval = -1;
-  let pollRequestedAt = 0;
 
   function ensureRequestActive() {
     if (currentRequest === null && pollDelayInterval === -1) {
@@ -367,7 +396,8 @@
       if (targetTime > now) {
         clearTimeout(pollDelayInterval);
         pollDelayInterval = setTimeout(restartPolling, targetTime - now + 10);
-        if (_delayFor === EVEN_IF_OFFLINE_TIMEOUT) {
+        if (!navigator.onLine) {
+          // nb: duplicate listeners discarded
           addEventListener('online', nowonline);
         }
 
