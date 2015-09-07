@@ -260,16 +260,20 @@
     setTimeout(ensureRequestActive, MIN_REQUEST_INTERVAL * 2);
   }
 
+  let pollDelayInterval = -1;
+  let pollRequestedAt = 0;
+
   function ensureRequestActive() {
-    // TODO
+    if (currentRequest === null && pollDelayInterval === -1) {
+      restartPolling();
+    }
   }
 
   function nowonline() {
-
+    clearTimeout(pollDelayInterval);
+    restartPolling();
   }
 
-  let pollDelayInterval = -1;
-  let pollRequestedAt = 0;
   function restartPolling() {
     // Conditions:
     //  1) if it's been less than MIN_REQUEST_INTERVAL since the last request started, wait for MIN_REQUEST_INTERVAL
@@ -515,18 +519,18 @@
         clientCount: clientCount
       };
       currentRequest = null;
-      setTimeout(restartPolling, 0);
+      setTimeout(restartPolling, MIN_REQUEST_INTERVAL);
+
     }).catch((err) => {
       // TODO aborting fetches
       if (err === "cancelled") {
-        console.log('Cancelled bus request completed');
-        ensureRequestActive();
-        return;
+        console.debug('Cancelled bus request completed');
       } else {
         console.error(err);
-        currentRequest = null;
-        delayPolling(NETWORK_DELAY);
       }
+
+      currentRequest = null;
+      setTimeout(restartPolling, MIN_REQUEST_INTERVAL);
     });
 
     // TODO aborting fetches - https://github.com/whatwg/fetch/issues/27
