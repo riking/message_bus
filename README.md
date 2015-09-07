@@ -19,6 +19,10 @@ Or install it yourself as:
 
     $ gem install message_bus
 
+Add it to your JS bundle:
+
+    //= require message-bus
+
 ## Usage
 
 Server to Server messaging
@@ -80,23 +84,41 @@ MessageBus.publish "/channel", "some message"
 MessageBus.publish "/global/channel", "will go to all sites"
 ```
 
-JavaScript can listen on any channel (and receive notification via polling or long polling):
+### JavaScript
+JavaScript can listen on any channel (and receive notification via polling or long polling).
 
-```html
-<script src="message-bus.js" type="text/javascript"></script>
+Include it via: `<script src="message-bus.js" type="text/javascript"></script>`
+
+Or include it in your JS bundle:
+```js
+//= require message-bus
 ```
-Note, the message-bus.js file is located in the assets folder.
+
+Usage:
 
 ```javascript
 MessageBus.start(); // call once at startup
 
 // how often do you want the callback to fire in ms
 MessageBus.callbackInterval = 500;
-MessageBus.subscribe("/channel", function(data){
+MessageBus.subscribe("/channel", function(data) {
   // data shipped from server
 });
 
+```
 
+If you have a ServiceWorker, the `message-bus-worker.js` script can multiplex the requests from multiple tabs.
+
+```js
+// From an existing ServiceWorker
+
+importScripts(
+  '/assets/message-bus-worker.js'
+);
+
+// Or:
+
+//= require message-bus-worker
 ```
 
 ## Configuration

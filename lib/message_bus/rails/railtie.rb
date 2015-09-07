@@ -7,6 +7,7 @@ class MessageBus::Rails::Railtie < ::Rails::Railtie
   initializer "message_bus.configure_init" do |app|
     MessageBus::MessageHandler.load_handlers("#{Rails.root}/app/message_handlers")
 
+    app.config.assets.paths += [File.join(File.dirname(__FILE__), '../../../assets/worker')]
     # We want MessageBus to show up after the session middleware, but depending on how
     # the Rails app is configured that might be ActionDispatch::Session::CookieStore, or potentially
     # ActionDispatch::Session::ActiveRecordStore.
