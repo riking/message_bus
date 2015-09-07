@@ -296,9 +296,8 @@
     //  - setup
     //  - conditions 1-3, action 1
     //  - if a condition is not met, reschedule
-    //  - condition 4
     //  - determine channels to request
-    //  - actions 2-3
+    //  - condition 4, actions 2-3
     //  - condition 5, action 4
     //  - actions 5-7
 
@@ -428,6 +427,7 @@
       }
       if (channelAdded) {
         currentRequest.cancelFunc();
+        currentRequest = null;
       } else {
         // A channel was removed or moved up
         return; // currentRequest
@@ -465,7 +465,7 @@
       body: formParts.join('&'),
       cache: 'no-store',
       credentials: 'include'
-    }
+    };
 
     headers.set('X-SILENCE-LOGGER', 'true');
     if (settings.shared_session_key) {
