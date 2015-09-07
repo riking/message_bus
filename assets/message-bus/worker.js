@@ -69,6 +69,7 @@
     time: 0,
     clientCount: 0
   };
+  let requestIdCount = 1;
   const MIN_REQUEST_INTERVAL = 100,
     CHANNEL_UNSUB_TIMEOUT = 1000 * 60,
     CLIENT_FAILSAFE_TIMEOUT = 1000 * 60,
@@ -314,7 +315,7 @@
     }
 
     //  1) if it's been less than MIN_REQUEST_INTERVAL since the last request started, wait MIN_REQUEST_INTERVAL
-    if (now - currentRequest.startedAt < MIN_REQUEST_INTERVAL) {
+    if (currentRequest && now - currentRequest.startedAt < MIN_REQUEST_INTERVAL) {
       delayFor(MIN_REQUEST_INTERVAL);
     }
 
@@ -344,11 +345,12 @@
       const targetTime = pollRequestedAt + _delayFor;
       if (targetTime > now) {
         clearTimeout(pollDelayInterval);
-        pollDelayInterval = setTimeout(restartPolling, now - targetTime + 1);
+        pollDelayInterval = setTimeout(restartPolling, targetTime - now + 10);
         if (_delayFor === EVEN_IF_OFFLINE_TIMEOUT) {
           addEventListener('ononline', nowonline);
         }
 
+        console.debug('MB: delaying for ' + _delayFor + ': settimeout(' + (targetTime - now) + ')');
         return; // pollDelayInterval
       }
     }
@@ -382,7 +384,7 @@
 
     //  4) if we have no clients, don't send the request
     if (clientIds.length === 0) {
-      console.info("Not sending bus request - no clients");
+      console.debug("MB: Not sending bus request - no clients");
       return; // stop
     }
 
@@ -423,13 +425,16 @@
       });
 
       if (requestsEqual) {
+        console.debug('MB: Requests are equal - skipping');
         return; // currentRequest
       }
       if (channelAdded) {
+        console.debug(`MB: Cancelling request #${currentRequest.debugRequestId}`);
         currentRequest.cancelFunc();
         currentRequest = null;
       } else {
         // A channel was removed or moved up
+        console.debug('MB: Requests are almost equal - skipping');
         return; // currentRequest
       }
     }
@@ -441,7 +446,7 @@
     let haveAny = false;
     objEach(requestPositions, () => haveAny = true);
     if (!haveAny) {
-      console.info("Not sending bus request - no subscribed channels");
+      console.debug("MB: Not sending bus request - no subscribed channels");
       return; // stop
     }
 
@@ -481,6 +486,10 @@
       cancelled = true;
     }
 
+    const debugRequestId = requestIdCount;
+    requestIdCount = requestIdCount + 1;
+
+    console.debug(`MB: Sending message bus request #${debugRequestId} for ${clientIds.join(',')}`);
     let thisRequest = fetch(`${settings.baseUrl}message-bus/${uniqueId}/poll`, opts).then((response) => {
       return response.json();
     }).then(json => {
@@ -526,6 +535,7 @@
         client.respond();
       });
 
+      console.debug(`MB: Bus request #${debugRequestId} completed`);
       lastSuccess = {
         time: new Date().getTime(),
         clientCount: clientIds.length
@@ -536,12 +546,12 @@
     }).catch((err) => {
       // TODO aborting fetches
       if (err === "cancelled") {
-        console.debug('Cancelled bus request completed');
+        console.debug(`MB: Cancelled bus request #${debugRequestId} completed`);
       } else {
         console.error(err);
+        currentRequest = null;
       }
 
-      currentRequest = null;
       setTimeout(restartPolling, MIN_REQUEST_INTERVAL);
     });
 
@@ -551,7 +561,8 @@
       sentData: positions,
       clientNum: clientIds.length,
       cancelFunc: cancel,
-      startedAt: new Date().getTime()
+      startedAt: new Date().getTime(),
+      debugRequestId: debugRequestId,
     };
   }
 
