@@ -40,9 +40,11 @@
     long_polling_interval: 25000,
   };
 
-  // activeClients[clientId] = MBClient
+  // activeClients = [Object: Mapping]
+  //   activeClients[clientId] = MBClient
   const activeClients = {};
 
+  // backlog = [Object: Mapping]
   // backlog[channel] = {
   //   last: position [Number],
   //   lastRequested: [Number: Timestamp],
@@ -107,7 +109,7 @@
     /*eslint-enable*/
   });
 
-  // Library Functions
+  // Library Functions / Polyfills
 
   function objEach(obj, cb) {
     for (let key in obj) {
@@ -524,7 +526,7 @@
     };
 
     headers.set('X-SILENCE-LOGGER', 'true');
-    if (settings.shared_session_key) {
+    if (settings.shared_session_key !== '') {
       headers.set('X-Shared-Session-Key', settings.shared_session_key);
       opts.mode = 'cors';
     }
