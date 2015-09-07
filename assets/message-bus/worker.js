@@ -353,6 +353,7 @@
     //  - condition 4, actions 2-3
     //  - condition 5, action 4
     //  - actions 5-7
+    //  - send
 
     // setup
     let _delayFor = 0;
@@ -504,8 +505,8 @@
     }
 
     // 7) send the request
-    doPolling(requestPositions, clientIds);
     pollRequestedAt = 0;
+    doPolling(requestPositions, clientIds);
   }
 
   function doPolling(positions, clientIds) {
@@ -596,7 +597,7 @@
 
       if (currentRequest.debugRequestId === debugRequestId) {
         currentRequest = null;
-        setTimeout(restartPolling, MIN_REQUEST_INTERVAL);
+        setTimeout(restartPolling, WAITING_FOR_CLIENTS_TIMEOUT * 1.2);
       }
     }).catch((err) => {
       // TODO aborting fetches
@@ -608,7 +609,7 @@
 
       if (currentRequest.debugRequestId === debugRequestId) {
         currentRequest = null;
-        setTimeout(restartPolling, MIN_REQUEST_INTERVAL);
+        setTimeout(restartPolling, WAITING_FOR_CLIENTS_TIMEOUT * 1.2);
       }
     });
 
