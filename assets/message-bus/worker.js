@@ -158,6 +158,7 @@
     const promise = new Promise(function (resolve, reject) {
       clientSelf.resolve = resolve;
       clientSelf.reject = reject;
+      // Failsafe if the worker polling breaks
       clientSelf.interval = setTimeout(() => {
         console.error('Bus timed out! cid:', clientSelf.clientId);
         resolve(timeoutResponse());
@@ -232,15 +233,14 @@
 
   function serveMessageBus(fetchEvt, clientId) {
     if (activeClients[clientId]) {
-      // TODO aborting fetches https://github.com/whatwg/fetch/issues/27
-      console.log('Cancelled previous reqeust for ' + clientId);
+      console.log('MB: Cleared aborted request from ' + clientId);
       activeClients[clientId].resolve(cancelledResponse());
       delete activeClients[clientId];
     }
+
     const client = new MBClient(clientId);
 
     fetchEvt.respondWith(
-      // XXX - request.formData() not available
       fetchEvt.request.text().then((bodyText) => {
         const kvPairs = parseForm(bodyText);
         kvPairs.forEach((reg) => {
@@ -541,19 +541,23 @@
         time: new Date().getTime(),
         clientCount: clientIds.length
       };
-      currentRequest = null;
-      setTimeout(restartPolling, MIN_REQUEST_INTERVAL);
 
+      if (currentRequest.debugRequestId === debugRequestId) {
+        currentRequest = null;
+        setTimeout(restartPolling, MIN_REQUEST_INTERVAL);
+      }
     }).catch((err) => {
       // TODO aborting fetches
       if (err === "cancelled") {
         console.debug(`MB: Cancelled bus request #${debugRequestId} completed`);
       } else {
         console.error(err);
-        currentRequest = null;
       }
 
-      setTimeout(restartPolling, MIN_REQUEST_INTERVAL);
+      if (currentRequest.debugRequestId === debugRequestId) {
+        currentRequest = null;
+        setTimeout(restartPolling, MIN_REQUEST_INTERVAL);
+      }
     });
 
     // TODO aborting fetches - https://github.com/whatwg/fetch/issues/27
