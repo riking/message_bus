@@ -2,7 +2,7 @@
   "use strict";
 
   self.MB_DEBUG = false;
-  console.info('Set self.MB_DEBUG = true to see debug messages');
+  console.debug('MB: Set ((ServiceWorkerGlobalScope) self).MB_DEBUG = true to see debug messages.');
 
   // TODO - handle every query param
   // dlp=t - disable long polling
@@ -237,13 +237,8 @@
 
       // Failsafe if the worker polling breaks
       clientSelf.interval = setTimeout(() => {
-        if (navigator.onLine && lastOnlineTime < clientSelf.startedAt) {
-          console.error('Bus timed out! cid:', clientSelf.clientId);
-          resolve(timeoutResponse());
-        } else {
-          console.warn('Bus timed out due to no network connection');
-          resolve(new Response('[]'));
-        }
+        console.error('Bus timed out! cid: ' + clientSelf.clientId);
+        resolve(timeoutResponse());
       }, CLIENT_FAILSAFE_TIMEOUT());
 
       clientSelf.startedAt = new Date().getTime();
