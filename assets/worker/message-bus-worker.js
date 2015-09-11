@@ -38,6 +38,10 @@
     }
   });
 
+  self.bus = {
+    subscribe: workerSubscribe
+  };
+
   // Global Variables
 
   const settings = {
@@ -57,6 +61,13 @@
   //   messages: [Array], // in order, lowest position first
   // }
   const backlog = {};
+
+  // workerCallbacks = [Object: Mapping]
+  // workerCallbacks[channel] = [{
+  //   last_id: position
+  //   func: [Function: callback(bus data)]
+  // }]
+  const workerCallbacks = {};
 
   // currentRequest = [null] | {
   //   // The promise from fetch() after all the .then() chains
@@ -89,8 +100,6 @@
   let pollDelayInterval = -1;
   // [Number: Timestamp] timestamp of the first restartPolling() call AFTER the currentRequest started
   let pollRequestedAt = 0;
-  // [Number: Timestamp] timestamp the network state last went online (rising edge)
-  let lastOnlineTime = 0;
 
   // Constants
 
@@ -157,6 +166,9 @@
       last: position,
       messages: []
     };
+    if (workerCallbacks[channel]) {
+      workerCallbacks[channel].forEach(sub => sub.last_id = position);
+    }
   }
 
   function pushBacklogMessage(channel, message) {
@@ -330,6 +342,35 @@
     return response;
   }
 
+  function workerSubscribe(channel, callback, lastId) {
+    if (typeof(lastId) !== "number" || lastId < 0) {
+      lastId = -1;
+    }
+
+    if (!workerCallbacks[channel]) {
+      workerCallbacks[channel] = [];
+    }
+
+    const newSubscription = {
+      func: callback,
+      last_id: lastId
+    };
+    workerCallbacks[channel].push(newSubscription);
+
+    // make first deliveries on next runloop
+    setTimeout(() => {
+      if (backlog[channel]) {
+        backlog[channel].messages.forEach(msg => {
+          if (msg.message_id > newSubscription.last_id) {
+            newSubscription.func(msg.data);
+            newSubscription.last_id = msg.message_id;
+          }
+        });
+      }
+      restartPolling();
+    }, 0);
+  }
+
   // Bus Polling functions
 
   function serveMessageBus(fetchEvt, clientId) {
@@ -366,7 +407,6 @@
   }
 
   function nowonline() {
-    lastOnlineTime = new Date().getTime();
     clearTimeout(pollDelayInterval);
     restartPolling();
   }
@@ -477,6 +517,22 @@
         }
       });
     });
+
+    let anyWorkerSubs = false;
+    objEach(workerCallbacks, (channel, subs) => subs.forEach(sub => {
+      anyWorkerSubs = true;
+      if (requestPositions[channel] === undefined) {
+        requestPositions[channel] = sub.last_id;
+      } else {
+        if (requestPositions[channel] < sub.last_id) {
+          requestPositions[channel] = sub.last_id;
+        }
+      }
+    }));
+
+    if (anyWorkerSubs) {
+      clientIds.push(uniqueId);
+    }
 
     //  4) if we have no clients, don't send the request
     if (clientIds.length === 0) {
@@ -602,23 +658,49 @@
 
       // Fill backlog with messages from server
       json.forEach(function(message) {
-        if (message.channel === "/__status") {
-          objEach(message.data, (channel, position) => {
-            setBacklogPosition(channel, position);
+        const channel = message.channel;
+        if (channel === "/__status") {
+          objEach(message.data, (ch, position) => {
+            setBacklogPosition(ch, position);
           });
-        } else if (message.channel === "/__flush") {
+        } else if (channel === "/__flush") {
           // Wipe backlog
-          objEach(backlog, (channel) => {
-            delete backlog[channel];
+          objEach(backlog, (ch) => {
+            delete backlog[ch];
           });
+          // Flush worker clients
+          objEach(workerCallbacks, (_, subs) => subs.forEach(sub => {
+            sub.last_id = -1;
+          }));
           // Mark clients to send flush message
           objEach(activeClients, (_, client) => {
             client.__flush();
           });
         } else {
-          pushBacklogMessage(message.channel, message);
-        }
-      });
+          // Push into backlog for clients
+          pushBacklogMessage(channel, message);
+
+          // Deliver to worker subscibers (in order)
+          if (workerCallbacks[channel]) {
+            if (message.client_ids && message.client_ids.indexOf(uniqueId) === -1) {
+              // not for us
+              workerCallbacks[channel].forEach(sub => sub.last_id = message.message_id);
+            } else {
+              workerCallbacks[channel].forEach(sub => {
+                if (sub.last_id < message.message_id) {
+                  sub.last_id = message.message_id;
+                  try {
+                    sub.func(message.data);
+                  } catch (e) {
+                    console.error("MB: serviceworker bus subscriber threw error on receipt");
+                    console.error(e);
+                  }
+                }
+              });
+            }
+          }
+        } // if-switch message.channel
+      }); // messages.forEach
     }).then(() => {
       // TODO aborting fetches
       if (cancelled) {
@@ -626,17 +708,17 @@
       }
 
       var finalClientCount = 0;
-      //let anyEmpty = false;
       const now = new Date().getTime();
+
       // Fulfill the network requests
       objEach(activeClients, (_, client) => {
         finalClientCount++;
         if (client.shouldRespond(now)) {
           client.respond();
-        } else {
-          //anyEmpty = true;
         }
       });
+
+      // nb: we already delivered to worker subscribers
 
       debugLog(`MB: Bus request #${debugRequestId} completed`);
       lastSuccess = {
