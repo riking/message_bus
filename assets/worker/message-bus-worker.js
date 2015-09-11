@@ -20,7 +20,10 @@
           if (typeof existing === "string") {
             settings[k] = v;
           } else if (typeof existing === "number") {
-            settings[k] = parseInt(v);
+            const numVal = parseInt(v);
+            if (isFinite(numVal)) {
+              settings[k] = numVal;
+            }
           }
         });
       });
@@ -86,6 +89,8 @@
   let pollDelayInterval = -1;
   // [Number: Timestamp] timestamp of the first restartPolling() call AFTER the currentRequest started
   let pollRequestedAt = 0;
+  // [Number: Timestamp] timestamp the network state last went online (rising edge)
+  let lastOnlineTime = 0;
 
   // Constants
 
@@ -93,17 +98,16 @@
   const MIN_REQUEST_INTERVAL = 100,
     // (ms) Time to keep asking the server for a channel even though no clients use it
     CHANNEL_KEEP_TIME = 1000 * 60,
-    // (ms) Time to wait for a response from the serviceWorker before declaring it broken
-    // TODO needs to be adjusted based on long_polling_interval
-    CLIENT_FAILSAFE_TIMEOUT = 25000 * 2.4,
     // (ms) Time to allow clients to send their bus requests before sending ours
-    WAITING_FOR_CLIENTS_TIMEOUT = 1000 * 3,
+    WAITING_FOR_CLIENTS_TIMEOUT = 1000 * 3;
+
+  const
+    // (ms) Time to wait for a response from the serviceWorker before declaring it broken
+    CLIENT_FAILSAFE_TIMEOUT = () => settings.long_polling_interval * 3.2,
     // (ms) Time to wait before sending an empty response
-    // TODO needs to be adjusted based on long_polling_interval
-    NO_RESPONSE_DELAY = 25000,
+    NO_RESPONSE_DELAY = () => settings.long_polling_interval,
     // (ms) Time to wait before sending bus request if browser is offline
-    // TODO needs to be adjusted based on long_polling_interval
-    EVEN_IF_OFFLINE_TIMEOUT = CLIENT_FAILSAFE_TIMEOUT - 25000 - 5000;
+    EVEN_IF_OFFLINE_TIMEOUT = () => settings.long_polling_interval * 1.9;
 
   const uniqueId = 'xxxxxxxxxxxx4xxxyxxxxxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
     /*eslint-disable*/
@@ -233,9 +237,14 @@
 
       // Failsafe if the worker polling breaks
       clientSelf.interval = setTimeout(() => {
-        console.error('Bus timed out! cid:', clientSelf.clientId);
-        resolve(timeoutResponse());
-      }, CLIENT_FAILSAFE_TIMEOUT);
+        if (navigator.onLine && lastOnlineTime < clientSelf.startedAt) {
+          console.error('Bus timed out! cid:', clientSelf.clientId);
+          resolve(timeoutResponse());
+        } else {
+          console.warn('Bus timed out due to no network connection');
+          resolve(new Response('[]'));
+        }
+      }, CLIENT_FAILSAFE_TIMEOUT());
 
       clientSelf.startedAt = new Date().getTime();
 
@@ -259,7 +268,7 @@
     if (this.hasData()) {
       return true;
     }
-    if (this.startedAt && now - this.startedAt > NO_RESPONSE_DELAY) {
+    if (this.startedAt && now - this.startedAt > NO_RESPONSE_DELAY()) {
       // Return an empty response if it's been longer than NO_RESPONSE_DELAY
       return true;
     }
@@ -356,10 +365,11 @@
   }
 
   function nowonline() {
+    lastOnlineTime = new Date().getTime();
     clearTimeout(pollDelayInterval);
-    removeEventListener('online', nowonline);
     restartPolling();
   }
+  addEventListener('online', nowonline);
 
   function restartPolling() {
     // Conditions:
@@ -424,7 +434,7 @@
 
     //  3) if the browser is offline, restart when we get online or after EVEN_IF_OFFLINE_TIMEOUT
     if (!navigator.onLine) {
-      delayFor(EVEN_IF_OFFLINE_TIMEOUT);
+      delayFor(EVEN_IF_OFFLINE_TIMEOUT());
     }
 
     // if a condition is not met, reschedule
@@ -433,10 +443,6 @@
       if (targetTime > now) {
         clearTimeout(pollDelayInterval);
         pollDelayInterval = setTimeout(restartPolling, targetTime - now + 10);
-        if (!navigator.onLine) {
-          // nb: duplicate listeners discarded
-          addEventListener('online', nowonline);
-        }
 
         debugLog('MB: delaying for ' + _delayFor + ': settimeout(' + (targetTime - now) + ')');
         return; // pollDelayInterval
