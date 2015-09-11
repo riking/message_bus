@@ -10,6 +10,11 @@
   // currently, dlp=t is ignored and worker=f causes a match failure
   const MessageBusRegex = /\/message-bus\/([0-9a-f]{32})\/poll\?(dlp=t)?$/;
 
+  self.addEventListener('install', (evt) => {
+    // TODO - backlog is not preserved across restarts
+    // we need to use IndexedDB to save it
+  });
+
   self.addEventListener('fetch', (evt) => {
     // TODO - optimize? this runs a lot
     if (evt.request.url.endsWith('/message-bus/settings.json')) {
@@ -39,7 +44,9 @@
   });
 
   self.bus = {
-    subscribe: workerSubscribe
+    subscribe: workerSubscribe,
+    // for use from push subscriptions
+    check: workerRequestPolling,
   };
 
   // Global Variables
@@ -100,6 +107,8 @@
   let pollDelayInterval = -1;
   // [Number: Timestamp] timestamp of the first restartPolling() call AFTER the currentRequest started
   let pollRequestedAt = 0;
+  // [Number: Timestamp] timestamp that the last page request came in
+  let lastPageRequestAt;
 
   // Constants
 
@@ -108,7 +117,9 @@
     // (ms) Time to keep asking the server for a channel even though no clients use it
     CHANNEL_KEEP_TIME = 1000 * 60,
     // (ms) Time to allow clients to send their bus requests before sending ours
-    WAITING_FOR_CLIENTS_TIMEOUT = 1000 * 3;
+    WAITING_FOR_CLIENTS_TIMEOUT = 1000 * 3,
+    // (ms) Time to keep sending requests without any open tabs
+    NO_CLIENTS_TIMEOUT = 1000 * 60 * 5;
 
   const
     // (ms) Time to wait for a response from the serviceWorker before declaring it broken
@@ -117,6 +128,8 @@
     NO_RESPONSE_DELAY = () => settings.long_polling_interval,
     // (ms) Time to wait before sending bus request if browser is offline
     EVEN_IF_OFFLINE_TIMEOUT = () => settings.long_polling_interval * 1.9;
+
+  lastPageRequestAt = new Date().getTime() - (NO_CLIENTS_TIMEOUT * 0.25);
 
   const uniqueId = 'xxxxxxxxxxxx4xxxyxxxxxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
     /*eslint-disable*/
@@ -371,6 +384,11 @@
     }, 0);
   }
 
+  function workerRequestPolling() {
+    lastPageRequestAt = new Date().getTime();
+    restartPolling();
+  }
+
   // Bus Polling functions
 
   function serveMessageBus(fetchEvt, clientId) {
@@ -397,6 +415,7 @@
       })
     );
 
+    lastPageRequestAt = new Date().getTime();
     setTimeout(ensureRequestActive, MIN_REQUEST_INTERVAL * 2);
   }
 
@@ -417,8 +436,10 @@
     //  1) if it's been less than MIN_REQUEST_INTERVAL since the last request started, wait for MIN_REQUEST_INTERVAL
     //  2) if less (or 0) clients signed up than last time, wait for WAITING_FOR_CLIENTS_TIMEOUT
     //  3) if the browser is offline, restart when we get online or after EVEN_IF_OFFLINE_TIMEOUT
-    //  4) if we have no clients, don't send the request
-    //  5) if a request is running and we have the same data to send, do nothing
+    //  4) if the only client is the worker, poll for at most 10 minutes
+    //      (done by not calling restartPolling() at the end of doPolling())
+    //  5) if we have no clients, don't send the request
+    //  6) if a request is running and we have the same data to send, do nothing
     //
     // Actions:
     //  1) if any client has data in the backlog, respond (and wait for WAITING_FOR_CLIENTS_TIMEOUT)
@@ -435,8 +456,8 @@
     //  - conditions 1-3, action 1
     //  - if a condition is not met, reschedule
     //  - determine channels to request
-    //  - condition 4, actions 2-3
-    //  - condition 5, action 4
+    //  - condition 5, actions 2-3
+    //  - condition 6, action 4
     //  - actions 5-7
     //  - send
 
@@ -731,7 +752,9 @@
 
       if (currentRequest.debugRequestId === debugRequestId) {
         currentRequest = null;
-        setTimeout(restartPolling, WAITING_FOR_CLIENTS_TIMEOUT * 0.9);
+        if (lastPageRequestAt + NO_CLIENTS_TIMEOUT >= now) {
+          setTimeout(restartPolling, WAITING_FOR_CLIENTS_TIMEOUT * 0.9);
+        }
       }
     }).catch((err) => {
       // TODO aborting fetches
@@ -743,7 +766,9 @@
 
       if (!currentRequest || currentRequest.debugRequestId === debugRequestId) {
         currentRequest = null;
-        setTimeout(restartPolling, WAITING_FOR_CLIENTS_TIMEOUT * 0.9);
+        if (lastPageRequestAt + NO_CLIENTS_TIMEOUT >= new Date().getTime()) {
+          setTimeout(restartPolling, WAITING_FOR_CLIENTS_TIMEOUT * 0.9);
+        }
       }
     });
 
