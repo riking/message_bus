@@ -408,9 +408,9 @@
 
   function nowonline() {
     clearTimeout(pollDelayInterval);
+    removeEventListener('online', nowonline);
     restartPolling();
   }
-  addEventListener('online', nowonline);
 
   function restartPolling() {
     // Conditions:
@@ -484,6 +484,9 @@
       if (targetTime > now) {
         clearTimeout(pollDelayInterval);
         pollDelayInterval = setTimeout(restartPolling, targetTime - now + 10);
+        if (!navigator.onLine) {
+          addEventListener('online', nowonline);
+        }
 
         debugLog('MB: delaying for ' + _delayFor + ': settimeout(' + (targetTime - now) + ')');
         return; // pollDelayInterval
