@@ -43,14 +43,18 @@ class MessageBus::Rack::Middleware
     end
   end
 
-  def self.backlog_to_json(backlog)
+  def self.backlog_to_json(backlog, client_ids=nil)
     m = backlog.map do |msg|
-      {
+      hash = {
         :global_id => msg.global_id,
         :message_id => msg.message_id,
         :channel => msg.channel,
         :data => msg.data
       }
+      if client_ids
+        hash[:client_ids] = msg.client_ids & client_ids
+      end
+      hash
     end.to_a
     JSON.dump(m)
   end
@@ -93,6 +97,10 @@ class MessageBus::Rack::Middleware
 
     client = MessageBus::Client.new(message_bus: @bus, client_id: client_id,
                                     user_id: user_id, site_id: site_id, group_ids: group_ids)
+
+    if client_ids = env['HTTP_BUS_CLIENT_IDS'.freeze]
+      client.client_ids.concat client_ids.split(',')
+    end
 
     request = Rack::Request.new(env)
     request.POST.each do |k,v|

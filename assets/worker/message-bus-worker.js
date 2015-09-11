@@ -292,7 +292,13 @@
       } else if (position < entry.last) {
         entry.messages.forEach((m) => {
           if (m.message_id > position) {
-            messages.push(m);
+            if (m.client_ids && m.client_ids.indexOf(this.clientId) === -1) {
+              // got a message for a different client - update the position
+              status[channel] = entry.last;
+              includeStatusChannel = true;
+            } else {
+              messages.push(m);
+            }
           }
         });
       }
@@ -567,7 +573,7 @@
       opts.mode = 'cors';
     }
     headers.set('Content-Type', 'application/x-www-form-urlencoded; charset=UTF-8');
-    // headers.set('Bus-Client-IDs', clientIds.join(','));
+    headers.set('Bus-Client-IDs', clientIds.join(','));
 
     // TODO aborting fetches
     let cancelled = false;

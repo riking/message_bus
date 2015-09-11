@@ -76,19 +76,23 @@ class MessageBus::ConnectionManager
   end
 
   def add_client(client)
-    @clients[client.client_id] = client
+    client.client_ids.each do |client_id|
+      @clients[client_id] = client
+    end
     @subscriptions[client.site_id] ||= {}
     client.subscriptions.each do |k,v|
       subscribe_client(client, k)
     end
   end
 
-  def remove_client(c)
-    @clients.delete c.client_id
-    @subscriptions[c.site_id].each do |k, set|
-      set.delete c.client_id
+  def remove_client(client)
+    client.client_ids.each do |client_id|
+      @clients.delete client_id
     end
-    c.cleanup_timer.cancel if c.cleanup_timer
+    @subscriptions[client.site_id].each do |k, set|
+      set.subtract client.client_ids
+    end
+    client.cleanup_timer.cancel if client.cleanup_timer
   end
 
   def lookup_client(client_id)
@@ -96,12 +100,12 @@ class MessageBus::ConnectionManager
   end
 
   def subscribe_client(client,channel)
-    set = @subscriptions[client.site_id][channel]
-    unless set
+    unless @subscriptions[client.site_id][channel]
       set = SynchronizedSet.new
       @subscriptions[client.site_id][channel] = set
     end
-    set << client.client_id
+
+    @subscriptions[client.site_id][channel].merge client.client_ids
   end
 
   def client_count

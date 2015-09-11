@@ -1,16 +1,24 @@
 class MessageBus::Client
-  attr_accessor :client_id, :user_id, :group_ids, :connect_time,
+  attr_accessor :client_ids, :user_id, :group_ids, :connect_time,
                 :subscribed_sets, :site_id, :cleanup_timer,
                 :async_response, :io, :headers
 
   def initialize(opts)
-    self.client_id = opts[:client_id]
+    self.client_ids = [opts[:client_id]]
     self.user_id = opts[:user_id]
     self.group_ids = opts[:group_ids] || []
     self.site_id = opts[:site_id]
     self.connect_time = Time.now
     @bus = opts[:message_bus] || MessageBus
     @subscriptions = {}
+  end
+
+  def client_id
+    if @client_ids.length == 1
+      @client_ids[0]
+    else
+      raise "this client is speaking on behalf of multiple client IDs"
+    end
   end
 
   def in_async?
@@ -60,7 +68,7 @@ class MessageBus::Client
 
   def allowed?(msg)
     allowed = !msg.user_ids || msg.user_ids.include?(self.user_id)
-    allowed &&= !msg.client_ids || msg.client_ids.include?(self.client_id)
+    allowed &&= !msg.client_ids || msg.client_ids.any? {|id| self.client_ids.include? id}
     allowed && (
       msg.group_ids.nil? ||
       msg.group_ids.length == 0 ||
@@ -144,6 +152,6 @@ class MessageBus::Client
   end
 
   def messages_to_json(msgs)
-    MessageBus::Rack::Middleware.backlog_to_json(msgs)
+    MessageBus::Rack::Middleware.backlog_to_json(msgs, client_ids.length > 1 ? client_ids : nil)
   end
 end
