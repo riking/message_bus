@@ -10,11 +10,6 @@
   // currently, dlp=t is ignored and worker=f causes a match failure
   const MessageBusRegex = /\/message-bus\/([0-9a-f]{32})\/poll\?(dlp=t)?$/;
 
-  self.addEventListener('install', (evt) => {
-    // TODO - backlog is not preserved across restarts
-    // we need to use IndexedDB to save it
-  });
-
   self.addEventListener('fetch', (evt) => {
     // TODO - optimize? this runs a lot
     if (evt.request.url.endsWith('/message-bus/settings.json')) {
@@ -171,6 +166,33 @@
       console.debug(message);
     }
   }
+
+  function idbOpen(name, version, upgradeHandler) {
+    return new Promise((resolve, reject) => {
+      const request = self.indexedDB.open(name, version);
+      request.onerror = reject;
+      request.onsuccess = () => resolve(request.result);
+      request.onupgradeneeded = upgradeHandler;
+    });
+  }
+
+  self.addEventListener('install', (installEvent) => {
+    // TODO - backlog is not preserved across restarts
+    // we need to use IndexedDB to save it
+
+    const promise = idbOpen('messageBus', 1, function(evt) {
+      const db = evt.target.result;
+      let version = evt.oldVersion;
+
+      if (version < 1) {
+        const backlogStore = db.createObjectStore("mbus-backlog", { keyPath: "global_id" });
+        backlogStore.createIndex("channel", "channel", { unique: false });
+        backlogStore.createIndex("message_id", "message_id", { unique: false });
+      }
+    });
+
+    installEvent.waitUntil(promise);
+  });
 
   // Utility Functions
 
